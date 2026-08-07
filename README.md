@@ -59,6 +59,8 @@ Support for other models (**Flux2**?) might be coming along.
 
 ## Installation
 
+### ComfyUI
+
 **Via ComfyUI Manager:** 
 Open Manager → **Install via Git URL** → paste `https://github.com/muerrilla/ComfyUI-Colorcraft` → Confirm.
 
@@ -68,6 +70,16 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/muerrilla/ComfyUI-Colorcraft.git
 ```
 Restart ComfyUI and refresh your browser. The nodes appear under **Muerrilla → Colorcraft** in the node menu.
+
+### WebUI Forge Neo
+
+The same repo doubles as a Forge Neo (`sd-webui-forge-classic`) extension — see [Forge Neo](#forge-neo) below for what it covers.
+
+```
+cd webui/extensions
+git clone https://github.com/aoleg/ComfyUI-Colorcraft.git
+```
+Restart the webui. Colorcraft appears as an accordion on both the txt2img and img2img tabs.
 
 ## Getting started
 
@@ -92,6 +104,48 @@ A handful of basic example workflows are included in `workflows/` folder. Drop a
 - **Be gentle, or give the model time to heal:** If your edits are too strong, they will eventually break the latent and create artifacts. In those cases you'd better spread the edit across multiple steps and/or avoid applying the edit on the last few steps, giving the model some time to recover. **In general, try to avoid applying edits on the very last step (unless the edit is *very* mild).**
 
 - **Every adjustment can be gated by a mask:** not a hand-painted region, but a live read of the image's own color, luminance, or hue. So, besides things like adjusting only the shadows or highlights, an edit can target "the warm highlights" or "everything except skin tones" using combined masks.
+
+## Forge Neo
+
+Colorcraft also runs as an extension for **WebUI Forge Neo** (`sd-webui-forge-classic`, neo branch). It is the same math — `lib_colorcraft/` is shared by both frontends, not reimplemented — reached through a flat panel instead of a node graph.
+
+### Where it hooks
+
+`Colorcraft Sampler` outputs a `SAMPLER`, but it never implements one: the wrapper registers a post-CFG function and then calls whatever base solver you gave it. So on Forge there is no sampler wrapper at all — the extension registers the same function via `set_model_sampler_post_cfg_function` on a UNet clone, per pass. Your **Sampling method** and **Schedule type** are untouched.
+
+Three things the node reads off its graph, the extension sources itself: the sigma schedule (from `transformer_options["sampling_sigmas"]`, read lazily on the hook's first call), the latent format (from `p.sd_model.model_config`, since Forge doesn't hang it on the UNet), and the colour anchors — which are VAE-encoded up front, *before* sampling, because a `vae.encode` from inside the sampling loop can evict the UNet.
+
+### What the panel covers
+
+One modifier, one schedule, one mask. That's `Colorcraft Advanced` plus `Masking` — which between them reach every axis in the pack. Controls are tiered exactly as the node tiers them: `Schedule shaping`, `More colors`, `Color shift` and `Advanced` are the node's own `advanced` / `more_colors` / `color_shift` / `dev` booleans, and they gate the same branches of the math.
+
+Not in this phase, because they need graph structure a form can't express:
+- **chaining several modifiers** (Luma → Punch → Chroma with different schedules) — the panel is a single modifier;
+- **mask trees deeper than two leaves** — you get Mask A, one operation, Mask B;
+- **blurring one leaf but not the other** — the blur applies to the combined mask.
+
+`Mask Preview` is folded in as a checkbox rather than a node, so you can tune a mask without rewiring anything.
+
+Two deliberate differences from the node's widgets: `plot_steps` is gone (it only drew tick marks on the LiteGraph plot; the webui already knows the step count), and the ±10 sliders are ±3 here, since a Gradio slider at ±10/0.01 is unusable for the gentle adjustments this is built for. `lib_colorcraft/params.py` records every range change explicitly and a test asserts none of them drifted by accident.
+
+### Settings persistence
+
+Nothing is written to `ui-config.json` — there are ~60 controls and they're per-image settings, not preferences. Your look travels in the PNG instead, as a single compact `Colorcraft:` infotext key holding only what you changed. Send-to-txt2img and paste both restore the whole panel, including resetting anything the pasted look didn't set.
+
+### Model support
+
+Support is per **VAE family**, not per checkpoint — the colour axes are derived from the latent space, so anything sharing a supported VAE is covered:
+
+| Latent format | Models | Vectors |
+|---|---|---|
+| `Wan21` | Krea 2, Qwen-Image, Anima, Wan 2.1 | `colorcraft-krea2` |
+| `Flux` | Flux, Z-Image, Lumina2, Chroma | `colorcraft-zimage` |
+
+Anything else (SD 1.5, SDXL, Flux2) has no basis: **Contrast** and **Color shift** still work, everything else — including masking — silently does nothing, and the log says so once per run. Only Krea 2 and Z-Image have been calibrated; the rest inherit their family's numbers and may want different slider values.
+
+### Verifying a change
+
+`python tests/harness.py` runs the whole port offline in a couple of seconds — no GPU, no model, no webui. It checks four things: that the shared-core refactor changed no values (against the pre-refactor `nodes.py`, recovered from git), that the flat panel builds the same chain a node graph would, that the Forge hook's output matches the ComfyUI node's on identical tensors, and that the parameter table hasn't drifted from `INPUT_TYPES`. Run it before a live generation, not after a suspicious image.
 
 ## Limitations
 
