@@ -73,7 +73,7 @@ Restart ComfyUI and refresh your browser. The nodes appear under **Muerrilla →
 
 Colorcraft works through a custom sampler. So drop in the `Colorcraft Sampler` node, plug in the required VAE and sampler (`KSamplerSelect`), and plug it into a `SamplerCustom` node. 
 
-Build out from there, chaining together the modifiers (e.g. `Colorcraft Luma` for adjusting exposure) of your liking and feeding them into the `Colorcraft Sampler` node.
+Build out from there, chaining together the modifiers of your liking and feeding them into `Colorcraft Sampler`. (e.g. `Colorcraft Luma` for adjusting exposure → `Colorcraft Punch` for adjusting contrast → `Colorcraft Sampler`)
 
 Every modifier node (except `Colorcraft Basic` and `Colorcraft Advanced`) requires a `Colorcraft Schedule` input, defining the sampling steps to which the modifier applies.
 
