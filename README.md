@@ -93,10 +93,6 @@ A handful of basic example workflows are included in `workflows/` folder. Drop a
 
 - **Every adjustment can be gated by a mask:** not a hand-painted region, but a live read of the image's own color, luminance, or hue. So, besides things like adjusting only the shadows or highlights, an edit can target "the warm highlights" or "everything except skin tones" using combined masks.
 
-## License
-
-Colorcraft is released under the **GNU GPLv3**. Use it, modify it, build on it freely, including commercially, but if you distribute a modified version, it has to stay open under the same license.
-
 ## Credits
 
 The sigma-to-step handling is adapted from Jonseed's ComfyUI port of Detail Daemon: https://github.com/Jonseed/ComfyUI-Detail-Daemon
