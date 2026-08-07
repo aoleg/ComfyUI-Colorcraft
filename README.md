@@ -25,6 +25,7 @@ Oh, and also, you won't need a second software or process. You do it all in one 
 
 ## What you get
 
+![Screenshot of all nodes in the pack](assets/nodes.jpg)
 - **Basic** — contrast and color shift, works on any model
 - **Advanced** — the full toolkit in one mega-node
 - **Luma** — exposure, tone compression
