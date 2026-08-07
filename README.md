@@ -66,7 +66,6 @@ Open Manager → **Install via Git URL** → paste `https://github.com/muerrilla
 cd ComfyUI/custom_nodes
 git clone https://github.com/muerrilla/ComfyUI-Colorcraft.git
 ```
-
 Restart ComfyUI and refresh your browser. The nodes appear under **Muerrilla → Colorcraft** in the node menu.
 
 ## Getting started
@@ -92,6 +91,10 @@ A handful of basic example workflows are included in `workflows/` folder. Drop a
 - **Be gentle, or give the model time to heal:** If your edits are too strong, they will eventually break the latent and create artifacts. In those cases you'd better spread the edit across multiple steps and/or avoid applying the edit on the last few steps, giving the model some time to recover. **In general, try to avoid applying edits on the very last step (unless the edit is *very* mild).**
 
 - **Every adjustment can be gated by a mask:** not a hand-painted region, but a live read of the image's own color, luminance, or hue. So, besides things like adjusting only the shadows or highlights, an edit can target "the warm highlights" or "everything except skin tones" using combined masks.
+
+## Limitations
+
+The nodes are designed for the classic UI. Nodes 2.0 is not supported until there's at least some dev docs for it.
 
 ## Credits
 
