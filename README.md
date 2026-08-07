@@ -1,6 +1,6 @@
 # Colorcraft
 
-**Color grading for ComfyUI, applied where it actually matters: inside the diffusion process itself.**
+### Color grading for ComfyUI, applied where it actually matters: inside the diffusion process itself.
 
 Colorcraft is a set of modular nodes that chain together, letting you build your own custom color-editing pipeline out of modifiers, schedules, and masks. Letting you mix and match exactly what a shot needs. 
 
@@ -35,7 +35,7 @@ Oh, and also, you won't need a second software or process. You do it all in one 
 - **Schedule** — build one schedule and share it across several modifiers, or use different schedules for different modifiers
 - **Masking** — key any edit by color, luminance, or hue
 - **Mask Blur** — blur masks and control the spread (grow/shrink)
-- **Combine Masks / Mask Blur** — build up complex, compound masks from simple ones
+- **Combine Masks** — build up complex, compound masks from simple ones
 - **Mask Preview** — tiny helper node for visualizing masks
 - **Sampler** — the actual workhorse. Chain together whatever modifiers you want, feed the last one into this, and pass it to a SamplerCustom node in place of your regular sampler
 
