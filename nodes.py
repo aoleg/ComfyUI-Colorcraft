@@ -349,7 +349,7 @@ def compute_hue_mask(x, axis1_basis, axis2_basis, mode, center, hardness, width=
     c2 = z @ axis2_basis
     angle = torch.atan2(c2, c1) - hue_bias
     pi = torch.pi
-    diff = (angle - center + pi) % (2 * pi) - pi  # wrapped difference, range (-pi, pi]
+    diff = (angle - center * pi + pi) % (2 * pi) - pi  # wrapped difference, range (-pi, pi]
     mask = _mask_shape(diff / pi, mode, 0.0, hardness, width, strength)
     B, C, H, W = shape
     return mask.reshape(B, H, W, 1).permute(0, 3, 1, 2)
@@ -795,6 +795,47 @@ class ColorcraftShift:
         return (chain,)
 
 
+class ColorcraftMaskPreview:
+    CATEGORY = "Muerrilla/Colorcraft"
+    RETURN_TYPES = ("COLORCRAFT_MODIFIER",)
+    FUNCTION = "make"
+
+    COLORS = {
+        "red": (0.5, -0.5, -0.5),
+        "green": (-0.5, 0.5, -0.5),
+        "blue": (-0.5, -0.5, 0.5),
+        "white": (0.5, 0.5, 0.5),
+        "black": (-0.5, -0.5, -0.5),
+    }
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "color": (list(cls.COLORS.keys()),),
+            },
+            "optional": {
+                "modifiers": ("COLORCRAFT_MODIFIER",),
+                "masking": ("COLORCRAFT_MASK",),
+            },
+        }
+
+    def make(self, color, modifiers=None, masking=None):
+        r, g, b = self.COLORS[color]
+        schedule = {
+            "strength": 1.0, "start": 1.0, "end": 1.0,
+            "bias": 0.5, "exponent": 0.0, "start_off": 0.0, "end_off": 0.0,
+            "smooth": True,
+        }
+        params = {
+            "color_shift_amount": 1.0, "mode": "legacy",
+            "red": r, "green": g, "blue": b, "brightness": 0.0,
+        }
+        chain = list(modifiers) if modifiers else []
+        chain.append({"kind": "shift", "params": params, "mask": masking, "schedule": schedule})
+        return (chain,)
+
+
 class ColorcraftMasking:
     CATEGORY = "Muerrilla/Colorcraft"
     RETURN_TYPES = ("COLORCRAFT_MASK",)
@@ -1188,6 +1229,7 @@ NODE_CLASS_MAPPINGS = {
     "ColorcraftSchedule": ColorcraftSchedule,
     "ColorcraftPunch": ColorcraftPunch,
     "ColorcraftShift": ColorcraftShift,
+    "ColorcraftMaskPreview": ColorcraftMaskPreview,
     "ColorcraftMasking": ColorcraftMasking,
     "ColorcraftMaskCombine": ColorcraftMaskCombine,
     "ColorcraftMaskBlur": ColorcraftMaskBlur,
@@ -1203,6 +1245,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ColorcraftSchedule": "Colorcraft Schedule",
     "ColorcraftPunch": "Colorcraft Punch",
     "ColorcraftShift": "Colorcraft Shift",
+    "ColorcraftMaskPreview": "Colorcraft Mask Preview",
     "ColorcraftMasking": "Colorcraft Masking",
     "ColorcraftMaskCombine": "Colorcraft Combine Masks",
     "ColorcraftMaskBlur": "Colorcraft Mask Blur",

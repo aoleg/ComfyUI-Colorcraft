@@ -134,8 +134,8 @@ function makeSpacer({ before, height = SPACER_HEIGHT, label = null } = {}) {
             const textWidth = ctx.measureText(text).width;       
             ctx.strokeStyle = "rgba(255,255,255,0.5)";       
             ctx.beginPath();     
-            ctx.moveTo(18 + textWidth, y + widgetHeight / 2);        
-            ctx.lineTo(widgetWidth - LABEL_INDENT, y + widgetHeight / 2);        
+            ctx.moveTo(LABEL_INDENT + 4 + textWidth, y + widgetHeight / 2);        
+            ctx.lineTo(widgetWidth - LABEL_INDENT - 4, y + widgetHeight / 2);        
             ctx.stroke();
             ctx.restore();
         },
@@ -422,7 +422,7 @@ function wrapAngle(a) {
 }
 
 function hueMaskValue(mode, center, hardness, width, strength, angle) {
-    const diff = wrapAngle(angle - center);
+    const diff = wrapAngle(angle - center * Math.PI);
     return maskShape(mode, hardness, width, strength, diff / Math.PI);
 }
 
@@ -565,7 +565,7 @@ function makeMaskPlotWidget() {
             // Hue's center is circular, so it always has a valid wrapped
             // position on the plot -- unlike a linear axis, where a center
             // far outside the domain is legitimately "off-plot".
-            const centerPos = isHue ? wrapAngle(p.center) : p.center;
+            const centerPos = isHue ? wrapAngle(p.center * Math.PI) : p.center;
             if (centerPos >= xmin && centerPos <= xmax) {
                 ctx.save();
                 ctx.setLineDash([5.5, 5]);
@@ -897,6 +897,15 @@ const NODE_CONFIGS = {
         ],
         spacers: [
             { before: "color_shift_amount" },
+        ],
+        accordions: [],
+        hasMaskPlot: false,
+        hasSchedule: false,
+    },
+    ColorcraftMaskPreview: {
+        boxes: [["color"]],
+        spacers: [
+            { before: "color" },
         ],
         accordions: [],
         hasMaskPlot: false,
