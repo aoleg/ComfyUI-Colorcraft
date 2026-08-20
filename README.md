@@ -1,6 +1,6 @@
 # Colorcraft
 
-### Color grading for ComfyUI, applied where it actually matters: inside the diffusion process itself.
+### Color grading for ComfyUI / Forge Neo, applied where it actually matters: inside the diffusion process itself.
 
 Colorcraft is a set of modular nodes that chain together, letting you build your own custom color-editing pipeline out of modifiers, schedules, and masks. Letting you mix and match exactly what a shot needs. 
 
@@ -50,7 +50,7 @@ Oh, and also, you won't need a second software or process. You do it all in one 
 - Every other node needs colour axes matched to the model's image encoder. Currently supported:
   - **Krea2** / **Qwen Image** / etc.
   - **Z-Image** / **Flux** / etc.
-  - **Flux2 Klein** — see [Which models it works with](#which-models-it-works-with)
+  - **Flux2 / Flux2 Klein** / etc.
 
 Colorcraft's color axes go by image encoder, not by checkpoint, so any model sharing one of the encoders above is covered automatically (that's the "etc."). 
 
@@ -140,11 +140,11 @@ Colorcraft works by nudging the image along colour directions that are specific 
 |---|---|
 | **Krea 2** | Qwen-Image, Anima, Wan 2.1 |
 | **Z-Image** | Flux, Lumina2, Chroma |
-| **Flux2 Klein** | — |
+| **Flux2** | Flux2 Klein 9B, potentially others sharing the same VAE |
 
 On anything else — SD 1.5, SDXL, Mugen — **Contrast** and **Color shift** still work, and everything else quietly does nothing. The log says so once when it happens, so check there if a generation comes out unchanged.
 
-One honest note about **Flux2**. The colour directions for Krea 2 and Z-Image come from the original author of Colorcraft. Flux2's don't exist upstream, so they were worked out here, from the model's own encoder. They're real — each one does what its label says, and the method was checked by re-deriving the two known models first and comparing — but they aren't the author's, so a given slider value can feel a bit different on Flux2 than on the other two. Its strengths were matched to Z-Image by eye-level effect rather than by raw numbers, so the sliders should at least be in the same ballpark across models.
+A note about **Flux2**. The colour directions for Krea 2 and Z-Image come from the original author of Colorcraft. Flux2's don't exist upstream, so they were worked out here, from the model's own encoder. They're real — each one does what its label says, and the method was checked by re-deriving the two known models first and comparing — but they aren't the author's, so a given slider value can feel a bit different on Flux2 than on the other two. Its strengths were matched to Z-Image by eye-level effect rather than by raw numbers, so the sliders should at least be in the same ballpark across models.
 
 Only Krea 2 and Z-Image were tuned by the original author. Other models sharing those encoders inherit those numbers and may want somewhat different slider values.
 
