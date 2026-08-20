@@ -35,7 +35,12 @@ from stubs import REPO  # noqa: E402
 
 FORGE_ROOT = REPO.parent / "sd-webui-forge-classic"
 
-PASS, FAIL = [], []
+PASS, FAIL, SKIP = [], [], []
+
+
+def skip(name, reason):
+    SKIP.append(name)
+    print(f"  [skip] {name}   {reason}")
 
 
 def check(name, condition, detail=""):
@@ -61,13 +66,59 @@ def close(a, b, tol=0.0):
 
 _lf = stubs.load_latent_formats(FORGE_ROOT)
 if _lf is not None:
-    FORMATS = {"krea2": _lf.Wan21(), "zimage": _lf.Flux()}
+    FORMATS = {"krea2": _lf.Wan21(), "zimage": _lf.Flux(), "flux2": _lf.Flux2()}
     FORMAT_SOURCE = "real (sd-webui-forge-classic)"
 else:
-    FORMATS = {"krea2": stubs.make_toy("Wan21"), "zimage": stubs.make_toy("Flux")}
+    FORMATS = {"krea2": stubs.make_toy("Wan21"), "zimage": stubs.make_toy("Flux"),
+               "flux2": stubs.make_toy("Flux2", identity=True)}
     FORMAT_SOURCE = "toy fallback — Forge checkout not found"
 
-LATENT_DIM = {"krea2": 3, "zimage": 2}
+LATENT_DIM = {"krea2": 3, "zimage": 2, "flux2": 2}
+CHANNELS = {"krea2": 16, "zimage": 16, "flux2": 128}
+
+#   Tier 1's reference is a revision of nodes.py that predates the Flux2 family
+#   entirely — it would resolve family=None and no-op, turning a real comparison
+#   into a vacuous one. So that tier stays on the two families the refactor
+#   actually moved.
+LEGACY_FAMILIES = ("krea2", "zimage")
+
+
+def install_test_vectors():
+    """Use the shipped flux2 vectors, or stand in for them if they are absent.
+
+    Normally the real file is there and this is a no-op. The fallback exists
+    because the family's *code paths* — 128 channels, an identity `process_in`,
+    a mask blur that divides by 16 instead of 8 — have to stay covered whatever
+    numbers are in the file, including in a checkout where the vectors have not
+    been fetched (LFS, a partial clone) or while a family is being re-derived.
+    It builds a synthetic, sub-pixel replicated basis in a temp directory and
+    points `core.VECTORS_DIR` there. Nothing is ever written into `vectors/`."""
+    import shutil
+    from lib_colorcraft import core
+
+    real = Path(core.VECTORS_DIR) / "colorcraft-flux2.safetensors"
+    if real.is_file():
+        return "real (vectors/colorcraft-flux2.safetensors)"
+
+    import atexit
+
+    from safetensors.torch import save_file
+    tmp = Path(tempfile.mkdtemp(prefix="cc_vectors_"))
+    atexit.register(shutil.rmtree, str(tmp), True)
+    for name in ("krea2", "zimage"):
+        shutil.copy(Path(core.VECTORS_DIR) / f"colorcraft-{name}.safetensors",
+                    tmp / f"colorcraft-{name}.safetensors")
+    save_file(stubs.synthetic_basis(channels=CHANNELS["flux2"],
+                                    subpixels=core.PACKED_SUBPIXELS),
+              str(tmp / "colorcraft-flux2.safetensors"))
+    core.VECTORS_DIR = str(tmp)
+    return f"synthetic (no derived file yet) in {tmp}"
+
+
+#   Before the Forge script is imported: it reads the shipped bundle once, at
+#   module scope.
+FLUX2_VECTORS = install_test_vectors()
+VECTORS_DIR = __import__("lib_colorcraft", fromlist=["core"]).core.VECTORS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -242,25 +293,40 @@ def run_node_post_cfg(mod, chain, x, sigmas, latent_format, vae):
 def tier1_refactor_equivalence():
     print("\nTier 1 — pre-refactor nodes.py vs current, bit-identical required")
 
+    #   The reference is the newest revision of nodes.py from *before* the
+    #   shared-core refactor, found by content rather than pinned to a hash, so
+    #   later commits don't silently turn this tier into a no-op.
+    head, rev = None, None
     try:
-        head = subprocess.run(["git", "show", "HEAD:nodes.py"], cwd=REPO,
-                              capture_output=True, check=True).stdout
+        revs = subprocess.run(["git", "log", "--format=%H", "--", "nodes.py"], cwd=REPO,
+                              capture_output=True, check=True, text=True).stdout.split()
+        for r in revs:
+            blob = subprocess.run(["git", "show", f"{r}:nodes.py"], cwd=REPO,
+                                  capture_output=True, check=True).stdout
+            if b"lib_colorcraft" not in blob:
+                head, rev = blob, r[:9]
+                break
     except Exception as exc:
-        check("recover pre-refactor nodes.py from git", False, str(exc))
+        skip("refactor equivalence", f"git unavailable ({exc})")
+        return
+
+    if head is None:
+        skip("refactor equivalence", "no pre-refactor revision of nodes.py in this history")
         return
 
     tmp = Path(tempfile.gettempdir()) / "_colorcraft_reference_nodes.py"
     tmp.write_bytes(head)
     reference = stubs.load_reference_nodes(tmp)
     current = stubs.load_current_nodes()
-    check("recover pre-refactor nodes.py from git", True, f"{len(head)} bytes")
+    check(f"recover pre-refactor nodes.py ({rev})", True, f"{len(head)} bytes")
 
-    for family, latent_format in FORMATS.items():
-        vae_ref = stubs.FakeVAE(LATENT_DIM[family])
-        vae_cur = stubs.FakeVAE(LATENT_DIM[family])
+    for family in LEGACY_FAMILIES:
+        latent_format = FORMATS[family]
+        vae_ref = stubs.FakeVAE(LATENT_DIM[family], CHANNELS[family])
+        vae_cur = stubs.FakeVAE(LATENT_DIM[family], CHANNELS[family])
         for five_d in (False, True):
             sigmas = stubs.make_sigmas(6)
-            x = stubs.make_latent(seed=11, five_d=five_d)
+            x = stubs.make_latent(seed=11, channels=CHANNELS[family], five_d=five_d)
             worst = 0.0
             for label, v in scenarios():
                 chain_ref = chain_via_nodes(reference, v)
@@ -290,9 +356,9 @@ def tier2_translation():
     for family, latent_format in FORMATS.items():
         basis = {k: t.to(torch.float32) for k, t in
                  __import__("lib_colorcraft", fromlist=["core"]).core.load_basis(family).items()}
-        vae = stubs.FakeVAE(LATENT_DIM[family])
+        vae = stubs.FakeVAE(LATENT_DIM[family], CHANNELS[family])
         sigmas = stubs.make_sigmas(8)
-        x = stubs.make_latent(seed=7)
+        x = stubs.make_latent(seed=7, channels=CHANNELS[family])
         worst, failed = 0.0, None
 
         for label, v in scenarios():
@@ -327,6 +393,51 @@ def tier2_translation():
 
 
 # ---------------------------------------------------------------------------
+# Tier 2b — the per-family model constants
+# ---------------------------------------------------------------------------
+
+def tier2b_family_constants():
+    """The mask-blur radius is quoted in decoded-image pixels and applied in
+    latent pixels, so it depends on the VAE's downscale factor. That was a
+    hardcoded 8 while every supported family happened to be 8x; Flux2 is 16x
+    (`backend/patcher/vae.py:139`), which would have made every blur on it twice
+    as wide as the number on the slider."""
+    print("\nTier 2b — per-family model constants")
+    from lib_colorcraft import core
+
+    leaf = {"mask_axis": "exposure", "mask_mode": "highs", "mask_center": 0.0,
+            "mask_hardness": 0.5, "mask_width": 0.5, "mask_strength": 1.0}
+    radius = 16.0
+
+    for family, expected in (("krea2", 8), ("zimage", 8), ("flux2", 16)):
+        dev = core.resolve_dev(base_values(), family)
+        if not check(f"{family}: resolve_dev carries downscale={expected}",
+                     dev["downscale"] == expected, f"got {dev['downscale']}"):
+            continue
+
+        basis = {k: v.float() for k, v in core.load_basis(family).items()}
+        x = stubs.make_latent(seed=5, channels=CHANNELS[family])
+        raw = core.resolve_mask_tensor(leaf, x, basis, dev)
+        got = core.resolve_mask_tensor({"blur": radius, "spread": 0.0, "a": leaf},
+                                       x, basis, dev)
+        want = core.gaussian_blur_mask(raw, radius / expected)
+        ok, detail = close(got, want, tol=0.0)
+        check(f"{family}: a {radius:g}px blur is applied at {radius / expected:g} latent px",
+              ok, detail)
+
+    #   and the guard for a dev dict built before the key existed
+    stale = {k: v for k, v in core.resolve_dev(base_values(), "flux2").items()
+             if k != "downscale"}
+    basis = {k: v.float() for k, v in core.load_basis("flux2").items()}
+    x = stubs.make_latent(seed=5, channels=CHANNELS["flux2"])
+    got = core.resolve_mask_tensor({"blur": radius, "spread": 0.0, "a": leaf}, x, basis, stale)
+    want = core.gaussian_blur_mask(core.resolve_mask_tensor(leaf, x, basis, stale),
+                                   radius / core.VAE_DOWNSCALE_FACTOR)
+    check("a dev dict with no downscale key falls back to 8x, not a KeyError",
+          close(got, want, tol=0.0)[0])
+
+
+# ---------------------------------------------------------------------------
 # Tier 3 — the Forge script
 # ---------------------------------------------------------------------------
 
@@ -337,7 +448,18 @@ def load_forge_script():
     if "colorcraft_neo" in sys.modules:
         return sys.modules["colorcraft_neo"]
     sys.path.insert(0, str(REPO / "scripts"))
-    return importlib.import_module("colorcraft_neo")
+    mod = importlib.import_module("colorcraft_neo")
+
+    #   The script's `_ensure_fresh_lib()` drops `lib_colorcraft` from
+    #   sys.modules and re-imports it, so the module object it holds is not the
+    #   one this file configured — and a re-import resets VECTORS_DIR to the
+    #   default, which on a family whose vectors are synthetic means the script
+    #   silently finds none while the node finds all of them. Harmless on Forge
+    #   (nothing re-points VECTORS_DIR there); fatal to a comparison here.
+    if mod.core.VECTORS_DIR != VECTORS_DIR:
+        mod.core.VECTORS_DIR = VECTORS_DIR
+        mod._SHIPPED_BASIS = mod.core.load_all_basis()
+    return mod
 
 
 def ui_args(script_mod, values, enabled=True):
@@ -458,6 +580,37 @@ def tier3_forge_script():
     check("a step outside the schedule window is an exact pass-through",
           torch.equal(outside, x5) and not torch.equal(inside, x5))
 
+    #   A vectors file that appears while the webui is running: this is what
+    #   deriving a new family and renaming its `-derived` file into place looks
+    #   like from the script's side. The shipped bundle is read once at load, so
+    #   caching the *absence* meant the new family stayed invisible until a UI
+    #   reload — and the symptom was silence, not an error.
+    stubs.LOGGER.lines.clear()
+    hit = mod._bundle("krea2")
+    check("a family already in the bundle is served from cache",
+          mod._bundle("krea2") is hit)
+
+    saved = dict(mod._SHIPPED_BASIS)
+    try:
+        mod._SHIPPED_BASIS = {f: b for f, b in saved.items() if f != "flux2"}
+        check("a family missing from the cached bundle is re-read from disk",
+              "flux2" in mod._bundle("flux2"))
+
+        p = stubs.FakeP(FORMATS["flux2"], stubs.FakeVAE(LATENT_DIM["flux2"], CHANNELS["flux2"]))
+        v = base_values(); v.update(exposure=0.5, start=0.0, end=1.0)
+        mod._SHIPPED_BASIS = {f: b for f, b in saved.items() if f != "flux2"}
+        script.before_process_batch(p, *ui_args(mod, v))
+        script.process_before_every_sampling(p, *ui_args(mod, v))
+        fnx = p.sd_model.forge_objects.unet.post_cfg[-1]
+        xf = stubs.make_latent(seed=13, channels=CHANNELS["flux2"])
+        got = fnx({"denoised": xf, "sigma": sigmas[3:4], **step_args})
+        check("...so the run that follows grades the latent instead of warning",
+              not torch.equal(got, xf)
+              and not any("is missing" in t for t in stubs.LOGGER.texts()),
+              "; ".join(stubs.LOGGER.texts())[:80])
+    finally:
+        mod._SHIPPED_BASIS = saved
+
     #   the anchor VAE encode happens before sampling, not inside the hook
     vae_counted = stubs.FakeVAE(LATENT_DIM["krea2"])
     p = stubs.FakeP(FORMATS["krea2"], vae_counted)
@@ -503,12 +656,12 @@ def tier3_forge_script():
     print("\nTier 3b — Forge hook output vs the ComfyUI node's, same inputs")
     current = stubs.load_current_nodes()
     for family, latent_format in FORMATS.items():
-        worst, failed = 0.0, None
+        worst, failed, moved = 0.0, None, 0.0
         for label, v in scenarios():
-            vae_a = stubs.FakeVAE(LATENT_DIM[family])
-            vae_b = stubs.FakeVAE(LATENT_DIM[family])
+            vae_a = stubs.FakeVAE(LATENT_DIM[family], CHANNELS[family])
+            vae_b = stubs.FakeVAE(LATENT_DIM[family], CHANNELS[family])
             five_d = LATENT_DIM[family] == 3
-            x = stubs.make_latent(seed=23, five_d=five_d)
+            x = stubs.make_latent(seed=23, channels=CHANNELS[family], five_d=five_d)
             sigmas = stubs.make_sigmas(8)
 
             node_out = run_node_post_cfg(current, chain_via_nodes(current, v), x, sigmas,
@@ -527,6 +680,7 @@ def tier3_forge_script():
                           "model_options": {"transformer_options": {"sampling_sigmas": sigmas}}})
                 d = (got.double() - node_out[i].double()).abs().max().item()
                 worst = max(worst, d)
+                moved = max(moved, (got.double() - x.double()).abs().max().item())
                 if d > 1e-6:
                     failed = f"{label} step {i}: max|diff|={d:.3e}"
                     break
@@ -534,6 +688,12 @@ def tier3_forge_script():
                 break
         check(f"{family} — {len(scenarios())} scenarios match the node",
               failed is None, failed or f"max|diff|={worst:.1e}")
+        #   Two sides that both do nothing agree perfectly. That is how a family
+        #   whose vector file is missing passes this tier without touching a
+        #   single vector, so the comparison only counts if the hook moved the
+        #   latent at all.
+        check(f"{family} — the hook actually graded the latent", moved > 1e-3,
+              f"max|out-in|={moved:.3e}")
 
 
 # ---------------------------------------------------------------------------
@@ -609,10 +769,12 @@ def tier4_params_drift():
 
 def main():
     print(f"Colorcraft port harness — latent formats: {FORMAT_SOURCE}")
+    print(f"                          flux2 vectors:  {FLUX2_VECTORS}")
     print(f"torch {torch.__version__}, {len(scenarios())} scenarios")
 
     tier1_refactor_equivalence()
     tier2_translation()
+    tier2b_family_constants()
     tier3_forge_script()
     tier4_params_drift()
 

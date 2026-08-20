@@ -21,10 +21,10 @@ are ours, standing in for "is a mask node wired up".
 
 RANGES — the ±10 sliders upstream are 2000 positions of Gradio drag for what the
 README says should be a gentle adjustment ("be gentle, or give the model time to
-heal"). Narrowed to ±3 here; see RANGE_DEVIATIONS for the full list. Every
-component is built with `do_not_save_to_config = True`, so unlike
-`knowledge_sigmas.md` §5.1's cautionary tale a later recalibration actually
-reaches people who already ran an older build.
+heal"). Narrowed to ±1 here, on measurement rather than taste; see AMT and
+RANGE_DEVIATIONS. Every component is built with `do_not_save_to_config = True`,
+so unlike `knowledge_sigmas.md` §5.1's cautionary tale this recalibration
+actually reached people who had already run the ±3 build.
 """
 
 from . import core
@@ -42,8 +42,20 @@ def _p(name, kind, default, group, gate=None, label=None, info=None,
     }
 
 
-#   the everyday amount axes; ±3 rather than upstream's ±10
-AMT = dict(minimum=-3.0, maximum=3.0, step=0.01)
+#   The everyday amount axes. Upstream ships +-10; this was +-3 on a guess, and
+#   is now +-1 on measurement. The Phase 0.5 basis-comparison run showed a
+#   SINGLE application of an offset already clipping above alpha 0.2-0.4 on both
+#   Krea 2 and Z-Image, and a generation applies it at every step in the
+#   schedule window -- which is why a value of 0.5 destroyed an image. Usable
+#   travel is roughly +-0.5, so +-1 keeps headroom without wasting 85% of the
+#   slider.
+#
+#   Measured directly: exposure, temperature, tint, clarity, sharpness (and
+#   lab-a/lab-b, the diagonals' parents). NOT measured: contrast, vibrance,
+#   chroma_contrast, color_shift_amount -- those use different maths
+#   (whole-latent, chroma-plane) and inherit this range by analogy, not by
+#   evidence.
+AMT = dict(minimum=-1.0, maximum=1.0, step=0.01)
 #   schedule amounts, in the same units as `strength`
 SCH = dict(minimum=-2.0, maximum=2.0, step=0.01)
 
@@ -194,22 +206,26 @@ RUNTIME_PARAMS = [
 #   Deliberate departures from `nodes.py`'s widget ranges, asserted by the drift
 #   test so a future upstream change shows up as a decision rather than a diff.
 RANGE_DEVIATIONS = {
-    "exposure": ((-10.0, 10.0), (-3.0, 3.0)),
-    "contrast": ((-10.0, 10.0), (-3.0, 3.0)),
-    "clarity": ((-10.0, 10.0), (-3.0, 3.0)),
-    "sharpness": ((-10.0, 10.0), (-3.0, 3.0)),
-    "temperature": ((-10.0, 10.0), (-3.0, 3.0)),
-    "tint": ((-10.0, 10.0), (-3.0, 3.0)),
-    "vibrance": ((-10.0, 10.0), (-3.0, 3.0)),
+    #   measured against the basis-comparison run (see AMT above)
+    "exposure": ((-10.0, 10.0), (-1.0, 1.0)),
+    "contrast": ((-10.0, 10.0), (-1.0, 1.0)),
+    "clarity": ((-10.0, 10.0), (-1.0, 1.0)),
+    "sharpness": ((-10.0, 10.0), (-1.0, 1.0)),
+    "temperature": ((-10.0, 10.0), (-1.0, 1.0)),
+    "tint": ((-10.0, 10.0), (-1.0, 1.0)),
+    "vibrance": ((-10.0, 10.0), (-1.0, 1.0)),
+    "chroma_contrast": ((-10.0, 10.0), (-1.0, 1.0)),
+    "temp_plus_tint": ((-10.0, 10.0), (-1.0, 1.0)),
+    "temp_minus_tint": ((-10.0, 10.0), (-1.0, 1.0)),
+    "lab_a": ((-10.0, 10.0), (-1.0, 1.0)),
+    "lab_b": ((-10.0, 10.0), (-1.0, 1.0)),
+    "lab_a_plus_b": ((-10.0, 10.0), (-1.0, 1.0)),
+    "lab_a_minus_b": ((-10.0, 10.0), (-1.0, 1.0)),
+    "color_shift_amount": ((-10.0, 10.0), (-1.0, 1.0)),
+    #   saturation keeps a wider positive range: its maths is a plain chroma
+    #   multiplier, so the number is natively interpretable (1.0 = double the
+    #   chroma) rather than an opaque offset
     "saturation": ((-1.0, 10.0), (-1.0, 3.0)),
-    "chroma_contrast": ((-10.0, 10.0), (-3.0, 3.0)),
-    "temp_plus_tint": ((-10.0, 10.0), (-3.0, 3.0)),
-    "temp_minus_tint": ((-10.0, 10.0), (-3.0, 3.0)),
-    "lab_a": ((-10.0, 10.0), (-3.0, 3.0)),
-    "lab_b": ((-10.0, 10.0), (-3.0, 3.0)),
-    "lab_a_plus_b": ((-10.0, 10.0), (-3.0, 3.0)),
-    "lab_a_minus_b": ((-10.0, 10.0), (-3.0, 3.0)),
-    "color_shift_amount": ((-10.0, 10.0), (-3.0, 3.0)),
     "start_off": ((-10.0, 10.0), (-2.0, 2.0)),
     "end_off": ((-10.0, 10.0), (-2.0, 2.0)),
     "mask_hardness": ((0.0, 100.0), (0.0, 20.0)),

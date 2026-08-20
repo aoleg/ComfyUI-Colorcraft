@@ -111,20 +111,45 @@ MASK_COMBINE_OPTIONS = ["and", "or", "subtract", "xor"]
 # sampler run regardless of what's actually connected -- the files are tiny.
 # ---------------------------------------------------------------------------
 
-BASIS_FAMILIES = ["krea2", "zimage"]
+BASIS_FAMILIES = ["krea2", "zimage", "flux2"]
 
-# Both supported VAE families downscale 8x -- used to convert the mask-blur
-# radius from decoded-image pixels (what the UI shows) to latent pixels (what
-# gaussian_blur_mask operates on).
-VAE_DOWNSCALE_FACTOR = 8
+# Converts the mask-blur radius from decoded-image pixels (what the UI shows) to
+# latent pixels (what gaussian_blur_mask operates on). Per family, because Flux2
+# is the first one that isn't 8x: `backend/patcher/vae.py:139` sets
+# downscale_ratio=16 for it, and the Wan branch (:145) is a 3-tuple whose spatial
+# entries are 8. `sd_models.py:384` reads the same attribute for `opt_f`.
+VAE_DOWNSCALE_FACTOR = 8  # fallback for a family with no entry below
+
+VAE_DOWNSCALE_FACTORS = {
+    "krea2": 8,
+    "zimage": 8,
+    "flux2": 16,
+}
 
 # latent_format class name -> basis family. Krea2/QwenImage report "Wan21";
-# Flux/Z-Image report "Flux". The names are the same on ComfyUI and on Forge Neo
+# Flux/Z-Image report "Flux"; Flux2 Klein reports "Flux2". The names are the same
+# on ComfyUI and on Forge Neo
 # (`modules_forge/packages/huggingface_guess/latent.py`), so this table is shared.
+#
+# `SDXL_Flux2` (Mugen) is deliberately absent: it is the same 32-channel space
+# *unpacked* (`latent.py:167` — 32 channels, downscale 8, reshape disabled), so
+# it needs its own table entry and its own vector file rather than reusing
+# flux2's packed 128-dim ones. Until those exist it falls through to the
+# "no basis for this model" warning, which is the correct behaviour.
 LATENT_FORMAT_TO_FAMILY = {
     "Wan21": "krea2",
     "Flux": "zimage",
+    "Flux2": "flux2",
 }
+
+# Families whose latent is a 2x2 spatial packing of a smaller channel space:
+# flat channel `i` is unpacked channel `i // 4`, sub-pixel slot `i % 4`
+# (`latent.py:157`'s latent_rgb_factors_reshape). A basis direction that differs
+# across the four slots stamps a fixed 2x2 tile into every latent pixel — a
+# 16-image-pixel-period grid at Flux2's downscale — so vectors for these families
+# are projected onto the replicated subspace when they are built.
+PACKED_FAMILIES = {"flux2"}
+PACKED_SUBPIXELS = 4
 
 # Per-model calibrated defaults for the chroma-plane math. `vibrance_k`/
 # `exposure_scale`/`color_scale`/`hue_bias` are internal only, no UI override.
@@ -134,30 +159,97 @@ LATENT_FORMAT_TO_FAMILY = {
 # roughly the same +-1 range across models. `hue_bias` (radians) rotates
 # zimage's hue angle so mask_center=0 lines up with the same visual spot on
 # the gradient that krea2 was calibrated against.
+#
+# flux2's row was measured with the probe's "Measure calibration" button against
+# a 24-image photo corpus (handoff §6.3), not inherited. Two notes on it:
+#
+#   * an earlier placeholder here predicted zimage x2.9, on the theory that a
+#     packed pixel's projection is 2x an unpacked one (four sub-pixel slots over
+#     a norm that only doubles) times a 1.44 latent-width ratio. The x2 identity
+#     is exact when the four slots are equal, and that is what made it wrong:
+#     real sub-pixel slots are decorrelated enough that four partial terms over
+#     a doubled norm land nearer x1. Measurement put the row at roughly *half*
+#     zimage's, not triple. Extrapolating a scale across latent geometries does
+#     not work; measure it.
+#   * the same measurement run on krea2 and zimage recovers their known values
+#     to within ~20-26%, low in both cases and in the same direction, so these
+#     numbers are likely a little low too. See handoff §6.6.
 MODEL_DEV_DEFAULTS = {
     "krea2":  {"vibrance_k": 1.0, "max_chroma": 2.5, "recenter": 0.5, "chroma_plane": "temp_tint", "exposure_scale": 3.5, "color_scale": 3.0, "hue_bias": 0.0},
     "zimage": {"vibrance_k": 2.0, "max_chroma": 5.0, "recenter": 0.5, "chroma_plane": "temp_tint", "exposure_scale": 7.5, "color_scale": 6.0, "hue_bias": -0.4},
+    "flux2":  {"vibrance_k": 1.83, "max_chroma": 4.6, "recenter": 0.5, "chroma_plane": "temp_tint", "exposure_scale": 4.0, "color_scale": 3.9, "hue_bias": +0.12},
 }
+
+# Families whose MODEL_DEV_DEFAULTS row is still a guess. Frontends can use this
+# to say so once, rather than presenting an extrapolation as a calibration.
+# Empty as of the Flux2 measurement — every shipped family's row is either the
+# author's or measured.
+UNCALIBRATED_FAMILIES = set()
 
 # `lib_colorcraft/` sits one level under the repo root; `vectors/` is at the root
 # and is shared by every frontend.
 VECTORS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vectors")
 
 
-def load_basis(family):
-    """Loads colorcraft-<family>.safetensors. Returns a dict[name -> 1D tensor]
-    or None if the file isn't present."""
-    path = os.path.join(VECTORS_DIR, f"colorcraft-{family}.safetensors")
+#   Vectors rediscovered from a VAE by the Phase 0 probe rather than shipped by
+#   the author, written alongside the originals as
+#   colorcraft-<family>-derived.safetensors. Selectable at runtime so a derived
+#   basis can be A/B'd against the real one with everything else held constant.
+DERIVED_VARIANT = "-derived"
+
+
+def load_basis(family, variant=""):
+    """Loads colorcraft-<family><variant>.safetensors. Returns a dict[name -> 1D
+    tensor] or None if the file isn't present."""
+    path = os.path.join(VECTORS_DIR, f"colorcraft-{family}{variant}.safetensors")
     if not os.path.isfile(path):
         return None
     return load_file(path)
 
 
-def load_all_basis():
+def load_all_basis(variant=""):
     """Every family whose vector file is actually present. The files are ~1.4 KB
     each, so loading all of them and resolving later is cheaper than being clever."""
-    loaded = {f: load_basis(f) for f in BASIS_FAMILIES}
+    loaded = {f: load_basis(f, variant) for f in BASIS_FAMILIES}
     return {f: b for f, b in loaded.items() if b is not None}
+
+
+#   Every axis the sampler can ask for. The four diagonals are exactly the
+#   normalised sum/difference of their parents -- measured at cosine 1.0000
+#   against both shipped files -- so a derived basis only has to solve seven.
+PRIMITIVE_AXES = ["exposure", "temperature", "tint", "lab-a", "lab-b", "clarity", "sharpness"]
+
+DIAGONAL_AXES = {
+    "temp+tint": ("temperature", "tint", +1.0),
+    "temp-tint": ("temperature", "tint", -1.0),
+    "lab-a+b": ("lab-a", "lab-b", +1.0),
+    "lab-a-b": ("lab-a", "lab-b", -1.0),
+}
+
+
+def project_replicated(v, subpixels=PACKED_SUBPIXELS):
+    """Drops whatever part of a packed-family direction differs between the four
+    sub-pixel slots of a channel — i.e. the part that would tile a fixed 2x2
+    pattern across the whole image instead of grading it.
+
+    Build-time only, and idempotent: an already-replicated vector comes back
+    unchanged. Measured on real Flux2 encodes the discarded part is 1-6% of the
+    vector and moves its direction by <=0.2%, so this is cheap insurance rather
+    than a correction."""
+    if v.shape[0] % subpixels != 0:
+        return v
+    w = v.view(-1, subpixels)
+    return w.mean(dim=1, keepdim=True).expand_as(w).reshape(-1).contiguous()
+
+
+def is_packed_family(family, latent_format=None):
+    """A family is packed if the table says so, or — for a family that has no
+    table entry yet — if its latent format carries the reshape that unpacks it
+    (`latent.py:157`). `SDXL_Flux2` sets that attribute to None explicitly, so
+    Mugen correctly reads as unpacked."""
+    if family in PACKED_FAMILIES:
+        return True
+    return getattr(latent_format, "latent_rgb_factors_reshape", None) is not None
 
 
 def family_for_latent_format(latent_format):
@@ -522,6 +614,11 @@ def resolve_dev(params, family):
     Advanced exposes these; other node kinds fall through to the default)."""
     dev = MODEL_DEV_DEFAULTS[family]
     return {
+        #   carried in `dev` rather than read from the VAE, because every
+        #   consumer of a mask spec already has the family and none of them has
+        #   the VAE. Kept out of the *_override set on purpose: it is a property
+        #   of the model, not an artistic control.
+        "downscale": VAE_DOWNSCALE_FACTORS.get(family, VAE_DOWNSCALE_FACTOR),
         "vibrance_k": dev["vibrance_k"],
         "exposure_scale": dev["exposure_scale"],
         "color_scale": dev["color_scale"],
@@ -552,7 +649,9 @@ def resolve_mask_tensor(mask_spec, pre, cur_basis, dev):
     reduce to normal boolean behavior automatically at the 0/1 extremes."""
     if "blur" in mask_spec:
         mask = resolve_mask_tensor(mask_spec["a"], pre, cur_basis, dev)
-        mask = gaussian_blur_mask(mask, mask_spec["blur"] / VAE_DOWNSCALE_FACTOR)
+        #   `.get`, so a dev dict assembled by hand (tests, a frontend that
+        #   predates the key) still blurs at the 8x default instead of raising.
+        mask = gaussian_blur_mask(mask, mask_spec["blur"] / dev.get("downscale", VAE_DOWNSCALE_FACTOR))
         return apply_mask_spread(mask, mask_spec["spread"])
 
     if "operation" in mask_spec:

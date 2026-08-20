@@ -14,3 +14,11 @@ env/
 Thumbs.db
 
 *.log
+
+probe_out/
+vectors/*-derived.safetensors
+
+# the probe lives in tools/ and is copied into scripts/ only while it is being
+# used; this stops that working copy from being committed back as a dev
+# accordion every Forge user would then load
+scripts/colorcraft_probe.py

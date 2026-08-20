@@ -31,11 +31,40 @@ Three things the ComfyUI node gets from its graph and this has to source itself:
     mid-run.
 """
 
+import os
+import sys
+
 import gradio as gr
 import torch
 
-from lib_colorcraft import core, engine, spec
-from lib_colorcraft import params as P
+
+def _ensure_fresh_lib():
+    """Forge's "Reload UI" re-executes everything under `scripts/` but leaves
+    already-imported packages in `sys.modules`, so an edit to `lib_colorcraft`
+    stays invisible until a full process restart and the script runs against a
+    stale core. Drop the package when its source is newer than what's loaded.
+
+    Development scaffolding — safe to delete once the repo settles."""
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "lib_colorcraft")
+    if not os.path.isdir(root):
+        return
+    newest = max((os.path.getmtime(os.path.join(root, f))
+                  for f in os.listdir(root) if f.endswith(".py")), default=0.0)
+    pkg = sys.modules.get("lib_colorcraft")
+    if pkg is not None and getattr(pkg, "_source_mtime", None) == newest:
+        return
+    for name in [n for n in list(sys.modules)
+                 if n == "lib_colorcraft" or n.startswith("lib_colorcraft.")]:
+        del sys.modules[name]
+    import lib_colorcraft
+    lib_colorcraft._source_mtime = newest
+
+
+_ensure_fresh_lib()
+
+from lib_colorcraft import core, engine, spec  # noqa: E402
+from lib_colorcraft import params as P  # noqa: E402
 
 from modules import devices, scripts
 from modules.processing import logger
@@ -45,10 +74,25 @@ from modules.ui_components import InputAccordion
 #   Keyed by (first_stage_model identity, latent-format name, colour); the
 #   identity half invalidates it for free on a checkpoint swap.
 _ANCHOR_CACHE = {}
-#   Keyed by (family, device, dtype). The vector files are ~1.4 KB, so all
-#   families load at import and only the device/dtype move is cached.
+#   Keyed by (family, device). The vector files are a few KB, so only the
+#   device/dtype move is worth caching.
 _BASIS_CACHE = {}
-_ALL_BASIS = core.load_all_basis()
+_SHIPPED_BASIS = core.load_all_basis()
+
+
+def _bundle(want=None):
+    """The vector files are read once at load.
+
+    `want` is the family this run needs, and it is what stops the cache from
+    remembering an *absence*. A vectors file that appears while the webui is
+    running -- dropping in a new family's file, or renaming a freshly derived
+    one into place -- would otherwise stay invisible until a UI reload, and the
+    symptom is silence: the log says the family has no vectors and nothing is
+    graded. Re-reading only on a miss leaves the hit path untouched."""
+    global _SHIPPED_BASIS
+    if want is not None and want not in _SHIPPED_BASIS:
+        _SHIPPED_BASIS = core.load_all_basis()
+    return _SHIPPED_BASIS
 
 
 def _component(param, visible=True):
@@ -123,6 +167,11 @@ class ColorcraftNeo(scripts.Script):
             return acc
 
         with _no_config(InputAccordion(False, label=self.title())) as enable:
+            gr.HTML('<span style="opacity:.7;font-size:.85em">Amounts are calibrated small: '
+                    'measured on Krea&nbsp;2 and Z-Image, a single application starts clipping '
+                    'above ~0.2, and the schedule applies it at every step in its window. '
+                    'Start around 0.1–0.3 and widen the window rather than raising the '
+                    'amount.</span>')
             with gr.Group():
                 _header("Schedule")
                 with gr.Row():
@@ -303,7 +352,7 @@ class ColorcraftNeo(scripts.Script):
         key = (family, device)
         if key not in _BASIS_CACHE:
             _BASIS_CACHE[key] = {k: v.to(device=device, dtype=torch.float32)
-                                 for k, v in _ALL_BASIS[family].items()}
+                                 for k, v in _bundle(family)[family].items()}
         return _BASIS_CACHE[key]
 
     def before_process_batch(self, p, *args, **kwargs):
@@ -327,7 +376,7 @@ class ColorcraftNeo(scripts.Script):
 
         latent_format = getattr(getattr(p.sd_model, "model_config", None), "latent_format", None)
         family = core.family_for_latent_format(latent_format)
-        if family is not None and family not in _ALL_BASIS:
+        if family is not None and family not in _bundle(family):
             logger.warning(f"[Colorcraft] detected VAE family '{family}' but "
                            f"vectors/colorcraft-{family}.safetensors is missing; "
                            f"vector-based controls are disabled this run.")

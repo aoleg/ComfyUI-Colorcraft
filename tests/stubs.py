@@ -83,8 +83,42 @@ class ToyLatentFormat:
         return (latent - self.shift_factor) * self.scale_factor
 
 
-def make_toy(name):
-    return type(name, (ToyLatentFormat,), {})()
+class ToyIdentityLatentFormat(ToyLatentFormat):
+    """Flux2's `process_in`/`process_out` are the identity (`latent.py:161`),
+    which is the whole reason it needs no anchor conversion."""
+
+    def process_in(self, latent):
+        return latent
+
+
+def make_toy(name, identity=False):
+    base = ToyIdentityLatentFormat if identity else ToyLatentFormat
+    return type(name, (base,), {})()
+
+
+def synthetic_basis(channels=128, seed=1234, subpixels=1, norms=None):
+    """A stand-in vector file for a family whose real one has not been derived
+    yet, so the 23 scenarios can still run at its channel count and latent
+    format.
+
+    `subpixels > 1` replicates each direction across a channel's sub-pixel slots,
+    matching how a packed family's real vectors are built — otherwise the
+    fixture would be the one thing the shipped file is guaranteed not to be."""
+    from lib_colorcraft import core
+
+    g = torch.Generator().manual_seed(seed)
+    norms = norms or {}
+    out = {}
+    for i, axis in enumerate(core.PRIMITIVE_AXES):
+        v = torch.randn(channels // subpixels, generator=g)
+        if subpixels > 1:
+            v = v.view(-1, 1).expand(-1, subpixels).reshape(-1)
+        out[axis] = (v / v.norm() * norms.get(axis, 1.0 + 0.1 * i)).contiguous()
+    for name, (a, b, sign) in core.DIAGONAL_AXES.items():
+        va, vb = out[a], out[b]
+        d = va / va.norm() + sign * (vb / vb.norm())
+        out[name] = (d / d.norm() * (0.5 * (va.norm() + vb.norm()))).contiguous()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -97,18 +131,20 @@ class FakeVAE:
     colour-dependent, so a mis-wired anchor shows up as a numeric difference
     rather than a coincidental match."""
 
-    def __init__(self, latent_dim=2):
+    def __init__(self, latent_dim=2, channels=16):
         self.latent_dim = latent_dim
+        self.latent_channels = channels
         self.first_stage_model = object()  # identity key for the Forge anchor cache
         self.calls = 0
 
     def encode(self, img):
         self.calls += 1
+        C = self.latent_channels
         mean = img.reshape(-1, img.shape[-1]).mean(0)              # [3]
-        mix = torch.linspace(-1.0, 1.0, 48).reshape(16, 3)
-        per_channel = (mix @ mean) + 0.05                          # [16]
+        mix = torch.linspace(-1.0, 1.0, C * 3).reshape(C, 3)
+        per_channel = (mix @ mean) + 0.05                          # [C]
         trailing = (1, 8, 8) if self.latent_dim == 3 else (8, 8)
-        return per_channel.reshape(1, 16, *([1] * len(trailing))).expand(1, 16, *trailing).contiguous()
+        return per_channel.reshape(1, C, *([1] * len(trailing))).expand(1, C, *trailing).contiguous()
 
 
 class FakeModel:
@@ -151,6 +187,16 @@ def load_current_nodes():
     pkg.__path__ = [str(REPO)]
     sys.modules[pkg_name] = pkg
 
+    #   Bind the *already imported* shared core into the synthetic package
+    #   instead of letting `from .lib_colorcraft import core` load a second copy
+    #   of it. Two copies means two `VECTORS_DIR`s, and a test that re-points one
+    #   of them silently compares a configured module against an unconfigured
+    #   one — which is how a family with no vector file can "match" by both
+    #   sides doing nothing.
+    for sub in ("", ".core", ".engine", ".params", ".spec"):
+        sys.modules[pkg_name + ".lib_colorcraft" + sub] = \
+            importlib.import_module("lib_colorcraft" + sub)
+
     spec_ = importlib.util.spec_from_file_location(pkg_name + ".nodes", REPO / "nodes.py")
     mod = importlib.util.module_from_spec(spec_)
     sys.modules[pkg_name + ".nodes"] = mod
@@ -184,6 +230,9 @@ class _Component:
     def change(self, *a, **kw):
         return None
 
+    def click(self, *a, **kw):
+        return None
+
 
 class _Ctx:
     def __init__(self, *a, **kw):
@@ -207,6 +256,7 @@ def install_gradio():
     gr.Radio = _Component
     gr.HTML = _Component
     gr.Textbox = _Component
+    gr.Button = _Component
     gr.Row = _Ctx
     gr.Group = _Ctx
     gr.Column = _Ctx
@@ -280,6 +330,12 @@ def install_modules():
 
     devices_mod.device = torch.device("cpu")
     devices_mod.cpu = torch.device("cpu")
+
+    shared_mod = types.ModuleType("modules.shared")
+    shared_mod.sd_model = None
+    shared_mod.opts = types.SimpleNamespace()
+    modules.shared = shared_mod
+    sys.modules["modules.shared"] = shared_mod
 
     modules.scripts = scripts_mod
     modules.processing = processing_mod

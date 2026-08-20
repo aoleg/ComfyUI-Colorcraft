@@ -47,15 +47,16 @@ Oh, and also, you won't need a second software or process. You do it all in one 
 
 - ComfyUI
 - **Basic** node should work with any model that has a VAE, no restrictions
-- Every other node needs a matching basis for the model's VAE family. Currently supported:
+- Every other node needs colour axes matched to the model's image encoder. Currently supported:
   - **Krea2** / **Qwen Image** / etc.
   - **Z-Image** / **Flux** / etc.
+  - **Flux2 Klein** — see [Which models it works with](#which-models-it-works-with)
 
-Colorcraft's color axes are derived per VAE family, not per model, so any model sharing one of the VAEs above is covered automatically (that's the "etc."). 
+Colorcraft's color axes go by image encoder, not by checkpoint, so any model sharing one of the encoders above is covered automatically (that's the "etc."). 
 
-That being said, I have only tested Krea2 and Z-Image. So, feedback would be much appreciated on how it fares with **Anima**, **Qwen Image**, and other models.
+That being said, I have only tested Krea2, Z-Image and Flux2 Klein. So, feedback would be much appreciated on how it fares with **Anima**, **Qwen Image**, and other models.
 
-Support for other models (**Flux2**?) might be coming along.
+Other encoders — **Mugen**, SDXL — may follow. Each needs its own set of axes worked out first.
 
 ## Installation
 
@@ -107,45 +108,55 @@ A handful of basic example workflows are included in `workflows/` folder. Drop a
 
 ## Forge Neo
 
-Colorcraft also runs as an extension for **WebUI Forge Neo** (`sd-webui-forge-classic`, neo branch). It is the same math — `lib_colorcraft/` is shared by both frontends, not reimplemented — reached through a flat panel instead of a node graph.
+Colorcraft also runs as an extension for **WebUI Forge Neo**. It does exactly the same thing to your image as the ComfyUI nodes do — it's the same code underneath — but instead of wiring up a graph you get a single panel.
 
-### Where it hooks
+### Using it
 
-`Colorcraft Sampler` outputs a `SAMPLER`, but it never implements one: the wrapper registers a post-CFG function and then calls whatever base solver you gave it. So on Forge there is no sampler wrapper at all — the extension registers the same function via `set_model_sampler_post_cfg_function` on a UNet clone, per pass. Your **Sampling method** and **Schedule type** are untouched.
+Open the **Colorcraft** panel on the txt2img or img2img tab and tick it on. Top to bottom, the panel is:
 
-Three things the node reads off its graph, the extension sources itself: the sigma schedule (from `transformer_options["sampling_sigmas"]`, read lazily on the hook's first call), the latent format (from `p.sd_model.model_config`, since Forge doesn't hang it on the UNet), and the colour anchors — which are VAE-encoded up front, *before* sampling, because a `vae.encode` from inside the sampling loop can evict the UNet.
+- **Schedule** — which part of the generation your adjustment applies to. This matters more than you'd think: applied early, an adjustment steers what the image becomes; applied late, it corrects the image that already formed.
+- **The adjustments themselves** — exposure, contrast, temperature, tint, saturation, clarity and the rest. The extra sections (More colors, Color shift, Advanced) are switches that reveal the deeper controls when you want them.
+- **Masking** — restrict the adjustment to part of the picture, chosen by the picture's own colour, brightness or hue rather than by painting a region. Tick **Mask preview** to see what you're actually selecting.
 
-### What the panel covers
+Your **Sampling method** and **Schedule type** keep working normally — Colorcraft doesn't replace the sampler, it just adjusts the image as the sampler goes.
 
-One modifier, one schedule, one mask. That's `Colorcraft Advanced` plus `Masking` — which between them reach every axis in the pack. Controls are tiered exactly as the node tiers them: `Schedule shaping`, `More colors`, `Color shift` and `Advanced` are the node's own `advanced` / `more_colors` / `color_shift` / `dev` booleans, and they gate the same branches of the math.
+Start small. The amount sliders run −1 to +1, and even a third of that is a visible change, because the adjustment is applied at every step in its window rather than once. If something looks broken or blotchy, you've gone too hard: either turn it down, or spread it over more steps and stop before the last one so the model has room to settle.
 
-Not in this phase, because they need graph structure a form can't express:
-- **chaining several modifiers** (Luma → Punch → Chroma with different schedules) — the panel is a single modifier;
-- **mask trees deeper than two leaves** — you get Mask A, one operation, Mask B;
-- **blurring one leaf but not the other** — the blur applies to the combined mask.
+### What the panel does and doesn't cover
 
-`Mask Preview` is folded in as a checkbox rather than a node, so you can tune a mask without rewiring anything.
+It gives you one adjustment, one schedule, and one mask — which between them reach every colour axis in the pack.
 
-Two deliberate differences from the node's widgets: `plot_steps` is gone (it only drew tick marks on the LiteGraph plot; the webui already knows the step count), and the ±10 sliders are ±3 here, since a Gradio slider at ±10/0.01 is unusable for the gentle adjustments this is built for. `lib_colorcraft/params.py` records every range change explicitly and a test asserts none of them drifted by accident.
+Three things the node version can do that the panel currently can't, because they need a graph to express:
 
-### Settings persistence
+- stacking several different adjustments, each on its own schedule;
+- masks built from more than two parts;
+- blurring one part of a mask but not the other (the blur applies to the finished mask).
 
-Nothing is written to `ui-config.json` — there are ~60 controls and they're per-image settings, not preferences. Your look travels in the PNG instead, as a single compact `Colorcraft:` infotext key holding only what you changed. Send-to-txt2img and paste both restore the whole panel, including resetting anything the pasted look didn't set.
+### Which models it works with
 
-### Model support
+Colorcraft works by nudging the image along colour directions that are specific to the model's image encoder — so support goes by encoder, not by checkpoint. If your model shares an encoder with one below, it's covered:
 
-Support is per **VAE family**, not per checkpoint — the colour axes are derived from the latent space, so anything sharing a supported VAE is covered:
+| Works with | Also covers |
+|---|---|
+| **Krea 2** | Qwen-Image, Anima, Wan 2.1 |
+| **Z-Image** | Flux, Lumina2, Chroma |
+| **Flux2 Klein** | — |
 
-| Latent format | Models | Vectors |
-|---|---|---|
-| `Wan21` | Krea 2, Qwen-Image, Anima, Wan 2.1 | `colorcraft-krea2` |
-| `Flux` | Flux, Z-Image, Lumina2, Chroma | `colorcraft-zimage` |
+On anything else — SD 1.5, SDXL, Mugen — **Contrast** and **Color shift** still work, and everything else quietly does nothing. The log says so once when it happens, so check there if a generation comes out unchanged.
 
-Anything else (SD 1.5, SDXL, Flux2) has no basis: **Contrast** and **Color shift** still work, everything else — including masking — silently does nothing, and the log says so once per run. Only Krea 2 and Z-Image have been calibrated; the rest inherit their family's numbers and may want different slider values.
+One honest note about **Flux2**. The colour directions for Krea 2 and Z-Image come from the original author of Colorcraft. Flux2's don't exist upstream, so they were worked out here, from the model's own encoder. They're real — each one does what its label says, and the method was checked by re-deriving the two known models first and comparing — but they aren't the author's, so a given slider value can feel a bit different on Flux2 than on the other two. Its strengths were matched to Z-Image by eye-level effect rather than by raw numbers, so the sliders should at least be in the same ballpark across models.
 
-### Verifying a change
+Only Krea 2 and Z-Image were tuned by the original author. Other models sharing those encoders inherit those numbers and may want somewhat different slider values.
 
-`python tests/harness.py` runs the whole port offline in a couple of seconds — no GPU, no model, no webui. It checks four things: that the shared-core refactor changed no values (against the pre-refactor `nodes.py`, recovered from git), that the flat panel builds the same chain a node graph would, that the Forge hook's output matches the ComfyUI node's on identical tensors, and that the parameter table hasn't drifted from `INPUT_TYPES`. Run it before a live generation, not after a suspicious image.
+### Your settings don't persist — your images carry them
+
+Colorcraft deliberately doesn't save its ~60 controls as webui defaults; they're per-image choices, not preferences, and the panel comes back at its defaults each session.
+
+Instead, whatever you set is written into the generated PNG. Drag that image back into the webui, or use send-to-txt2img, and the whole panel is restored — including clearing anything the saved look didn't set. So an image you liked is always enough to get back to how you made it.
+
+### Under the hood
+
+If you're modifying the extension rather than using it, [DEVNOTES.md](DEVNOTES.md) covers where it hooks into Forge, how the shared code is laid out, how the colour directions for a new model are derived, and how to run the test suite.
 
 ## Limitations
 
